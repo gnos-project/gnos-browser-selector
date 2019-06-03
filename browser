@@ -1,0 +1,303 @@
+#!/bin/bash
+# DESC  browser selector
+# DEPS  yad crudini
+# USAG  --app NAME: force application, no detection
+
+# CONST
+CONFIG_PATH=~/.config/browser
+CONFIG_FILE="$CONFIG_PATH/config.csv"
+DEFAULT_NAME=default
+APP_DETECT_SKIP_LIST="
+    browser x-www-browser gnome-www-browser gnome-open xdg-open
+    sh bash zsh fish nohup sudo
+    plugin_host
+    "
+LAUNCHER_CMD="exec bash /usr/local/bin/gnosh Open"
+if [[ $( id -u ) == "0" ]] ; then
+    if [[ -n "$PKEXEC_UID" || -n "$SUDO_UID" ]] ; then
+        CONFIG_PATH="$( getent passwd ${PKEXEC_UID:-$SUDO_UID} | cut -f 6 -d ":" )${CONFIG_PATH#~}"
+        LAUNCHER_CMD="exec sudo --set-home -u #${PKEXEC_UID:-$SUDO_UID} ${LAUNCHER_CMD#exec bash}"
+    else
+        echo "ERROR: Cannot launch browser as root" >&2
+        exit 1
+    fi
+fi
+
+
+
+
+# FUNC
+FindBrowser ()
+{
+    awk -F ";" -v app="$1" -v dom="$2" \
+        '$1~/^#/ {next} ($2==app) && ($3==dom) { print $1; exit }' \
+        "$CONFIG_FILE"
+}
+
+BrowserSelected () # $1:LAUNCHER:NAME $2:OPT $3:CALLER_PID
+{
+    readarray -t args <"$argList"
+
+    # Save config
+    if [[ "$2" == "'$fordef'" ]] ; then
+        if [[ "$1" != 'NONE' && -f "$CONFIG_PATH/$1.desktop" ]] ; then
+            ln -s "$CONFIG_PATH/$1.desktop" "$CONFIG_PATH/default.desktop"
+        else
+            ln -s /dev/null "$CONFIG_PATH/default.desktop"
+        fi
+    elif [[ $2 =~ ^\'$forapp.*$forand ]] ; then
+        echo "$1;$app;$domain" >>"$CONFIG_FILE"
+    elif [[ $2 =~ ^\'$forapp ]] ; then
+        echo "$1;$app;" >>"$CONFIG_FILE"
+    elif [[ $2 =~ ^\'$fordom ]] ; then
+        echo "$1;;$domain" >>"$CONFIG_FILE"
+    fi
+
+    # Kill parent
+    pkill --signal SIGUSR1 -P $3 &>/dev/null
+
+    # Launch browser
+    if [[ "$1" != 'NONE' && -f "$CONFIG_PATH/$1.desktop" ]] ; then
+        # echo RUN: $LAUNCHER_CMD "$CONFIG_PATH/$1.desktop" "${args[@]}" >&2
+        $LAUNCHER_CMD "$CONFIG_PATH/$1.desktop" "${args[@]}"
+    fi
+}
+
+InList () # $1:WORD $*:LIST
+{
+    {
+        local word=$1 ; shift
+        for w in $* ; do
+            [[ "$w" == "$word" ]] && return 0
+        done
+        return 1
+    } 2>/dev/null
+}
+
+
+
+# FROM xdg-open
+first_word()
+{
+    read first rest
+    echo "$first"
+}
+binary_to_desktop_file()
+{
+    search="${XDG_DATA_HOME:-$HOME/.local/share}:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+    # binary="`which "$1"`"
+    # binary="`readlink -f "$binary"`"
+    # base="`basename "$binary"`"
+    base=$1 # PATCHED
+    IFS=:
+    for dir in $search; do
+        unset IFS
+        [ "$dir" ] || continue
+        [ -d "$dir/applications" ] || [ -d "$dir/applnk" ] || continue
+        for file in "$dir"/applications/*.desktop "$dir"/applications/*/*.desktop "$dir"/applnk/*.desktop "$dir"/applnk/*/*.desktop; do
+            [ -r "$file" ] || continue
+            # Check to make sure it's worth the processing.
+            grep -q "^Exec.*$base" "$file" || continue
+            # Make sure it's a visible desktop file (e.g. not "preferred-web-browser.desktop").
+            grep -Eq "^(NoDisplay|Hidden)=true" "$file" && continue
+            command="`grep -E "^Exec(\[[^]=]*])?=" "$file" | cut -d= -f 2- | first_word`"
+            command="`which "$command"`"
+            # if [ x"`readlink -f "$command"`" = x"$binary" ]; then
+            if [ x"`basename "$command"`" = x"$base" ]; then # PATCHED
+                # Fix any double slashes that got added path composition
+                echo "$file" | sed -e 's,//*,/,g'
+                return
+            fi
+        done
+    done
+}
+
+
+
+# INIT: fasttrack default
+if [[ -f "$CONFIG_PATH/$DEFAULT_NAME.desktop" ]] ; then
+    $LAUNCHER_CMD "$CONFIG_PATH/$DEFAULT_NAME.desktop" "$@"
+elif [[ -c "$CONFIG_PATH/$DEFAULT_NAME.desktop" ]] ; then  # DEV: /dev/null
+    exit 0
+fi
+
+
+# INIT
+
+if [[ "$1" == --app ]] ; then
+    # force app
+    app=$2
+    shift 2
+else
+    # detect app
+    app="$( pstree -s $$ )"
+# DBG pst=$app
+    app="${app//---/\/}"
+    app="$( dirname "$app" )"
+    app="$( dirname "$app" )"
+
+    while InList $(basename "$app") $APP_DETECT_SKIP_LIST ; do
+        app="$( dirname "$app" )"
+    done
+    app="$( basename "$app" )"
+    [[ "$app" == systemd || "$app" == init ]] && app=
+fi
+
+# detect domain
+declare -a domains
+for url in "$@" ; do
+    if [[ $url =~ ^mailto: ]] ; then
+        domain=mailto:
+    elif [[ $url =~ ^file: || $url =~ ^/ ]] ; then
+        domain=file:
+    else
+        domain=${url#http://}
+        domain=${domain#https://}
+        domain=${domain%%/*}
+        domain=${domain%%:*}
+    fi
+    domains+=("$domain")
+done
+
+
+# MAIN: read config
+
+if [[ $# == 1 && -n "$app" ]] ; then
+    found_appdom="$( FindBrowser "$app" "$domain" )"
+elif [[ $# == 1 ]] ; then
+    found_dom="$( FindBrowser "" "$domain" )"
+fi
+
+if [[ -z "$found_appdom" ]] ; then
+    if [[ -n "$app" ]] ; then
+        found_app="$( FindBrowser "$app" "" )"
+    fi
+    if [[ -n "$domain" && -z "$found_dom" ]] ; then
+        found_dom="$( FindBrowser "" "$domain" )"
+    fi
+fi
+
+declare -a browsers
+if [[ -n "$found_appdom" ]] ; then
+    [[ "$found_appdom" == 'NONE' ]] && exit
+    $LAUNCHER_CMD "$CONFIG_PATH/$found_appdom.desktop" "$@"
+    exit $?
+elif [[ -n "$found_app" && -n "$found_dom" && "$found_app" == "$found_dom" ]] ; then
+    [[ "$found_app" == 'NONE' ]] && exit
+    $LAUNCHER_CMD "$CONFIG_PATH/$found_app.desktop" "$@"
+    exit $?
+elif [[ -n "$found_app" && -n "$found_dom" ]] ; then
+    # Static browsers list
+    browsers+=("$CONFIG_PATH/$found_app.desktop")
+    browsers+=("$CONFIG_PATH/$found_dom.desktop")
+elif [[ -n "$found_app" ]] ; then
+    [[ "$found_app" == 'NONE' ]] && exit
+    $LAUNCHER_CMD "$CONFIG_PATH/$found_app.desktop" "$@"
+    exit $?
+elif [[ -n "$found_dom" ]] ; then
+    [[ "$found_dom" == 'NONE' ]] && exit
+    $LAUNCHER_CMD "$CONFIG_PATH/$found_dom.desktop" "$@"
+    exit $?
+fi
+
+
+# MAIN: Ask user
+
+forget='No'
+export fordom='For domain '
+export forapp='For app '
+export forand=' only to domain '
+export fordef='Set as default browser'
+
+if [[ $# == 1 ]] ; then
+    action="access:\n$domain"
+    if [[ -n $app && ${#browsers[@]} -eq 0 ]] ; then
+        remember="$forget!$forapp$app!$forapp$app$forand$domain!$fordom$domains!$fordef"
+    elif [[ -n $app ]] ; then
+        remember="$forget!$forapp$app$forand$domain!$fordef"
+    else
+        remember="$forget!$fordom$domains!$fordef"
+    fi
+else
+    if [[ $# == 0 ]] ; then
+        action="open a browser"
+    else
+        action="access:\n${domains[@]}"
+    fi
+    if [[ -n $app ]] ; then
+        remember="$forget!$forapp$app!$fordef"
+    else
+        remember="$forget!$fordef"
+    fi
+fi
+
+
+# detect .desktop
+if [[ -n "$app" ]] ; then
+
+    dsk="$( binary_to_desktop_file "$app" )"
+    if [[ -n "$dsk" ]] ; then
+        icon=$( grep -E 'Icon=' "$dsk" 2>/dev/null | head -1 | cut -d= -f 2 )
+        name=$( grep -E 'Name=' "$dsk" 2>/dev/null | head -1 | cut -d= -f 2 )
+        [[ -n "$name" ]] && appName="$name"
+    else
+        appName="$app"
+    fi
+fi
+
+# default
+[[ -n "$appName" ]] || appName="Unknown application"
+[[ -n "$icon" ]]    || icon=application-x-executable-symbolic
+
+
+
+# Transmit args
+export argList=$( mktemp )
+trap 'rm "$argList"' INT TERM EXIT QUIT
+for arg in "$@" ; do
+    echo "$arg" >>"$argList"
+done
+
+
+# Dynamic browsers list
+if [[ ${#browsers[@]} -eq 0 ]] ; then
+    for browser in "$CONFIG_PATH/"*.desktop ; do
+        [[ "$( basename "$browser" .desktop )" == "$DEFAULT_NAME" ]] && continue
+        browsers+=("$browser")
+    done
+fi
+
+# Count entries
+max=$((${#browsers[@]}+3))
+
+
+# Yad args
+declare -a yargs
+cnt=0
+for browser in "${browsers[@]}" ; do
+    [[ "$( basename "$browser" .desktop )" == "$DEFAULT_NAME" ]] && continue
+    yargs+=(--field=" $( crudini --get "$browser" 'Desktop Entry' Name )!$( crudini --get "$browser" 'Desktop Entry' Icon )":BTN)
+    yargs+=('bash -c "BrowserSelected '"$( basename "$browser" .desktop )"' \"%'$max'\" '$$'"')
+    ((cnt++))
+done
+
+
+# Yad run
+export app domain CONFIG_PATH CONFIG_FILE LAUNCHER_CMD
+export -f BrowserSelected
+yad --width=370 --center --on-top  --skip-taskbar \
+    --no-buttons \
+    --image $icon --image-on-top \
+    --title "Select browser" \
+    --text="$appName wants to $action" \
+    --form \
+    "${yargs[@]}" \
+    --field=" Block!gtk-cancel":BTN 'bash -c "BrowserSelected NONE \"%'$max'\" '$$'"' \
+    --field=" Remember choice":LBL "" \
+    --field="":CB "$remember" \
+    &>/dev/null
+    # DBG --text="$appName wants to $action\n\nAPP:$app\n\nARGS:$*\n\nTREE:$pst" \
+
+# echo RET:$?
+# TIP 252: ESC
+exit
