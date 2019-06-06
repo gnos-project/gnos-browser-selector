@@ -1,8 +1,8 @@
-<p align="center"><img src="https://gnos.in/img/shot/common/gnos-browser-selector_0.png"></img></p>
+<div align="center"><p align="center"><img src="https://gnos.in/img/shot/common/gnos-browser-selector_0.png"></img></p></div>
 
 # GNOS Browser Selector
 
-Pick your browser instead of the default one
+GUI to select your browser on demand
 
 - Configurable browser list
 - One-click browser selection/discard
