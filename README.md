@@ -32,7 +32,7 @@ User selections are stored in `~/.config/browser/config.csv` file, columns are:
 
 ## Install
 
-Depends on [`sugar`](https://github.com/gnos-project/gnos-sugar), `yad` & `crudini`.
+Depends on [`gnos-sugar`](https://github.com/gnos-project/gnos-sugar), `yad` & `crudini`.
 
 GNOS [installer](https://github.com/gnos-project/gnos-gnowlegde) automatically  hijacks browser launching mecanisms, for manual installation you should check:
 

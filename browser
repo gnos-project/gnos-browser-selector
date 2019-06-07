@@ -12,7 +12,7 @@ APP_DETECT_SKIP_LIST="
     sh bash zsh fish nohup sudo
     plugin_host
     "
-LAUNCHER_CMD="exec bash /usr/local/bin/sugar Open"
+LAUNCHER_CMD="exec bash /usr/local/bin/gnos-sugar Open"
 if [[ $( id -u ) == "0" ]] ; then
     if [[ -n "$PKEXEC_UID" || -n "$SUDO_UID" ]] ; then
         CONFIG_PATH="$( getent passwd ${PKEXEC_UID:-$SUDO_UID} | cut -f 6 -d ":" )${CONFIG_PATH#~}"
